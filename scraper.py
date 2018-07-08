@@ -20,11 +20,14 @@ from bs4 import BeautifulSoup
 import datetime
 
 
+base_link = "https://www.sec.gov"
+
+
 def get_links(ticker, file_type):
     base_url1 = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK="
     base_url2 = "&type="
     base_url3 = "&dateb=&owner=exclude&count=40"
-    base_link = "https://www.sec.gov"
+
     url = base_url1 + ticker + base_url2 + file_type + base_url3
     res = requests.get(url)
     soup = BeautifulSoup(res.content, 'lxml')
@@ -43,11 +46,40 @@ def get_links(ticker, file_type):
     index = 0
     good_links = []
     for date in dates:
-        if date > datetime.datetime(2007, 1, 1).date():
+        if date > datetime.datetime(2008, 1, 1).date():
             good_links.append(links[index])
             index += 1
 
-    return links
+    return good_links
 
 
-print(get_links("msft", "10-k"))
+def get_document(link):
+    res = requests.get(link)
+    soup = BeautifulSoup(res.content, 'lxml')
+    table = soup.select('table[summary="Document Format Files"]')
+    doc_link = table[0].find('a').get('href')
+    res = requests.get(base_link + doc_link)
+    return res.content
+
+
+def find_net_income(tables):
+    for table in tables:
+        paragraphs = table.find_all('p')
+        for p in paragraphs:
+            text = p.get_text()
+            if text == "Net income":
+                print(text)
+                #going to have to write something to find parent and sibling combination that produces the value based on where the next valid number is.
+                net_income = p.parent.next_sibling.next_sibling.next_sibling.next_sibling.next_sibling.next_sibling.get_text()
+                net_income = net_income.strip()
+                net_income = net_income.replace(',', '')
+                net_income = int(net_income)
+                return net_income
+
+
+links = get_links("goog", "10-k")
+for link in links:
+    filing_doc = get_document(link)
+    doc_soup = BeautifulSoup(filing_doc, 'lxml')
+    tables = doc_soup.find_all('table')
+    print(find_net_income(tables))
