@@ -18,6 +18,7 @@ import re
 import requests
 from bs4 import BeautifulSoup
 import datetime
+from dateutil.parser import parse
 
 
 base_link = "https://www.sec.gov"
@@ -66,6 +67,11 @@ def is_ammend(page, index):
         return True
     return False
 
+
+def is_valid_year(num):
+    return (this_year - 10) <= num < this_year
+
+
 def get_document(link):
     res = requests.get(link)
     soup = BeautifulSoup(res.content, 'lxml')
@@ -75,15 +81,85 @@ def get_document(link):
     return res.content
 
 
-def find_net_income(year, tables):
+def get_all_net_incomes(tables):
+    income_table, income_cell = find_net_income(tables)
+    years = get_all_income_years(income_table)
+    net_incomes = get_net_incomes(income_cell)
+    if len(years) != len(net_incomes):
+        if len(years) * 4 == len(net_incomes):
+            new_net_incomes = []
+            index = 0
+            next_income = 0
+            for income in net_incomes:
+                next_income += income
+                index += 1
+                if index == 4:
+                    new_net_incomes.append(next_income)
+                    next_income = 0
+                    index = 0
+            net_incomes = new_net_incomes
+        else:
+            return None
+    return years, net_incomes
+
+
+#Need to look at how to get net loss
+def find_net_income(tables):
     for table in tables:
         cells = table.find_all('td')
         for cell in cells:
             text = get_cell_text(cell)
-            if text == "Net income" or text == "Net income (loss)":
-                column_num = find_column_num(year, table)
-                net_income = get_n_num(column_num, cell)
-                return net_income
+            if text == "Net income" or text == "Net income (loss)" or text == "Net earnings":
+                return table, cell
+
+
+def get_all_income_years(table):
+    years = []
+    rows = table.find_all('tr')
+    found_year_row = False
+    for row in rows:
+        if found_year_row:
+            return years
+        columns = row.find_all('td')
+        for column in columns:
+            text = get_cell_text(column)
+            text = text.split('(')
+            text = text[0]
+            text = get_useable_text(text)
+            if text.isdigit():
+                if is_valid_year(int(text)):
+                    found_year_row = True
+                    years.append(int(text))
+            elif is_date(text):
+                text = text.replace(',', ', ')
+                date = parse(text)
+                year = date.year
+                if is_valid_year(year):
+                    found_year_row = True
+                    years.append(year)
+    return years
+
+
+def get_net_incomes(cell):
+    row = cell.parent
+    while row.name != "tr":
+        row = row.parent
+    columns = row.find_all('td')
+    incomes = []
+    for column in columns:
+        text = column.get_text()
+        text = text.replace(',', '')
+        text = text.replace('\n', '')
+        is_loss = 1
+        if len(text) > 0:
+            if text[0] == "(":
+                is_loss = -1
+            text = text.replace('(', '')
+            text = text.replace(')', '')
+            if text.isdigit():
+                income = int(text) * is_loss
+                incomes.append(income)
+    return incomes
 
 
 def find_column_num(year, table):
@@ -105,8 +181,8 @@ def get_cell_text(cell):
     if (text is None or len(text) is 0) and len(cell.contents) > 0:
         text = cell.contents[0].get_text()
     text = text.replace('\n', '')
-    text = text.split('(')
-    text = text[0]
+    #text = text.split('(')
+    #text = text[0]
     text = text.strip()
     return text
 
@@ -134,6 +210,13 @@ def get_n_num(n, base_cell):
             index += 1
 
 
+def is_date(string):
+    try:
+        parse(string)
+        return True
+    except ValueError:
+        return False
+
 
 def find_doc_year(doc):
     header_divs = doc.find_all("div", class_="infoHead")
@@ -142,18 +225,32 @@ def find_doc_year(doc):
             date_text = div.next_sibling.get_text()
 
 
+def get_past_ten_years_net_income(ticker):
+    links, years = get_links(ticker, "10-k")
+    incomes = dict()
+    if years[0] == this_year:
+        index = 0
+        for year in years:
+            year -= 1
+            years[index] = year
+            index += 1
+    for link in links:
+        filing_doc = get_document(link)
+        doc_soup = BeautifulSoup(filing_doc, 'lxml')
+        tables = doc_soup.find_all('table')
+        temp_dict = dict()
+        years, net_incomes = get_all_net_incomes(tables)
+        for year, income in zip(years, net_incomes):
+            temp_dict[year] = income
+        keylist = temp_dict.keys()
+        for key in sorted(keylist, reverse=True):
+            if key not in incomes.keys():
+                incomes[key] = temp_dict[key]
+                if key == this_year - 10:
+                    return incomes
+    return incomes
 
-links, years = get_links("amd", "10-k")
-if years[0] == this_year:
-    index = 0
-    for year in years:
-        year -= 1
-        years[index] = year
-        index += 1
-index = 0
-for link in links:
-    filing_doc = get_document(link)
-    doc_soup = BeautifulSoup(filing_doc, 'lxml')
-    tables = doc_soup.find_all('table')
-    print(find_net_income(years[index], tables))
-    index += 1
+
+incomes = get_past_ten_years_net_income("amd")
+for key, value in incomes.items():
+    print(str(key) + " " + str(value))
